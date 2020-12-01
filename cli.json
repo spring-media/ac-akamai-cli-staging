@@ -1,0 +1,12 @@
+{
+  "requirements": {
+    "python": "3.0.0"
+  },
+  "commands": [
+    {
+      "name": "staging",
+      "version": "0.1.0",
+      "description": "An Akamai CLI command for staging domains"
+    }
+  ]
+}

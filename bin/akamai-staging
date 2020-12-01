@@ -1,0 +1,67 @@
+#!/usr/bin/env python
+
+import argparse
+from dns.resolver import dns
+import sys
+
+class MyArgumentParser(argparse.ArgumentParser):
+    def error(self, message):
+        self.print_help(sys.stderr)
+        self.exit(0, '%s: error: %s\n' % (self.prog, message))
+
+def createHostEntries(opts):
+    if not isinstance(opts.domain, type(None)):
+        print ("Domain for staging: "+opts.domain)
+        answer = dns.resolver.resolve(opts.domain, 'CNAME')
+
+        if len(answer) > 0:
+            cname = str(answer[0])
+            if cname.find('edgekey.net') >= 0:
+                cnameStaging = cname.replace('edgekey.net.', 'edgekey-staging.net')
+                print ("Entry for /etc/hosts:")
+                print ("---------------------")
+                ipStaging = dns.resolver.resolve(cnameStaging)
+                if len(ipStaging) > 0:
+                    print (str(ipStaging[0])+"\t"+cnameStaging)
+                    print ("")
+                else:
+                    print ('No ip address for '+cnameStaging+' found')
+            else:
+                print ("No Akamai CNAME for "+opts.domain)
+
+        else:
+            print ("No CNAME found for "+opts.domain)
+    else:
+        print ("No domain given")
+
+def main():
+    parser = MyArgumentParser(
+            description='staging the given domain',
+    )
+
+    subparsers = parser.add_subparsers(help='commands', dest="command")
+
+    create_parser = subparsers.add_parser("help", help="Show available help")
+    create_parser = subparsers.add_parser("list", help="Subcommands")
+    create_parser = subparsers.add_parser("hosts", help="Create eintries for /etc/hosts")
+    create_parser.add_argument("domain", nargs='?')
+    
+    opts = parser.parse_args()
+
+    if opts.command == "help":
+        parser.print_help()
+
+    elif opts.command == "list":
+        parser.print_help()
+        
+    elif opts.command == "hosts":
+        createHostEntries(opts)
+
+    else:
+        # argparse will error on unexpected commands, but
+        # in case we mistype one of the elif statements...
+        parser.print_help(sys.stderr)
+
+
+if __name__ == '__main__':
+    main()
