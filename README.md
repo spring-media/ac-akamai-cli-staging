@@ -7,7 +7,7 @@ This repo is an command for Akamai CLI to staging given domains.
 Installation is done via `akamai install`:
 
 ```
-$ akamai install <...>
+$ akamai install https://github.com/spring-media/ac-akamai-cli-staging.git
 ```
 
 Running this will run the system `python setup.py` automatically. 
@@ -17,5 +17,5 @@ Running this will run the system `python setup.py` automatically.
 To update to the latest version:
 
 ```
-$ akamai update <...>
+$ akamai update staging
 ```
