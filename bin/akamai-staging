@@ -22,7 +22,7 @@ def createHostEntries(opts):
                 print ("---------------------")
                 ipStaging = dns.resolver.resolve(cnameStaging)
                 if len(ipStaging) > 0:
-                    print (str(ipStaging[0])+"\t"+cnameStaging)
+                    print (str(ipStaging[0])+"\t"+opts.domain)
                     print ("")
                 else:
                     print ('No ip address for '+cnameStaging+' found')
