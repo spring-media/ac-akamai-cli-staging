@@ -19,3 +19,11 @@ To update to the latest version:
 ```
 $ akamai update staging
 ```
+
+## Running
+
+To run it:
+
+```
+$ akamai staging hosts www.akamai.com
+```
