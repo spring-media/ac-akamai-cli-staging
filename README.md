@@ -26,4 +26,5 @@ To run it:
 
 ```
 $ akamai staging hosts www.akamai.com
+$ akamai staging hosts www.akamai.com,www.akamai.de
 ```
