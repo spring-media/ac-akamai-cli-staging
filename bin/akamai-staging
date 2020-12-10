@@ -11,39 +11,53 @@ class MyArgumentParser(argparse.ArgumentParser):
 
 def createHostEntries(opts):
     if not isinstance(opts.domain, type(None)):
-        print ("Domain for staging: "+opts.domain)
-        answer = dns.resolver.resolve(opts.domain, 'CNAME')
+        print ("Domain(s) for staging: "+opts.domain)
 
-        if len(answer) > 0:
-            cname = str(answer[0])
-            if cname.find('edgekey.net') >= 0:
-                cnameStaging = cname.replace('edgekey.net.', 'edgekey-staging.net')
-                print ("Entry for /etc/hosts:")
-                print ("---------------------")
-                ipStaging = dns.resolver.resolve(cnameStaging)
-                if len(ipStaging) > 0:
-                    print (str(ipStaging[0])+"\t"+opts.domain)
-                    print ("")
-                else:
-                    print ('No ip address for '+cnameStaging+' found')
+        domains = opts.domain.split(',')
+
+        domainsHosts = []
+
+        for domain in domains:
+            try:
+                answer = dns.resolver.resolve(domain, 'CNAME')
+            except Exception:
+                print ("can't resolve domain "+domain)
             else:
-                print ("No Akamai CNAME for "+opts.domain)
+                if len(answer) > 0:
+                    cname = str(answer[0])
+                    if cname.find('edgekey.net') >= 0:
+                        cnameStaging = cname.replace('edgekey.net.', 'edgekey-staging.net')
+                        ipStaging = dns.resolver.resolve(cnameStaging)
+                        if len(ipStaging) > 0:
+                            domainsHosts.append(str(ipStaging[0])+"\t"+domain)
+                        else:
+                            print ('No ip address for '+cnameStaging+' found')
+                    else:
+                        print ("No Akamai CNAME for "+domain)
 
-        else:
-            print ("No CNAME found for "+opts.domain)
+                else:
+                    print ("No CNAME found for "+domain)
+
+        if len(domainsHosts) > 0:
+            print ("")
+            print ("Entry for /etc/hosts:")
+            print ("---------------------")
+            for entry in domainsHosts:
+                print (entry)
+            print ("")
     else:
         print ("No domain given")
 
 def main():
     parser = MyArgumentParser(
-            description='staging the given domain',
+            description='staging the given domain(s)',
     )
 
     subparsers = parser.add_subparsers(help='commands', dest="command")
 
     create_parser = subparsers.add_parser("help", help="Show available help")
     create_parser = subparsers.add_parser("list", help="Subcommands")
-    create_parser = subparsers.add_parser("hosts", help="Create eintries for /etc/hosts")
+    create_parser = subparsers.add_parser("hosts", help="Create eintries for /etc/hosts; more than one domain are seperat by ','")
     create_parser.add_argument("domain", nargs='?')
     
     opts = parser.parse_args()
