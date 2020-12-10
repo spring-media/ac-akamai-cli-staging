@@ -2,6 +2,8 @@
 
 import argparse
 from dns.resolver import dns
+import json
+import os
 import sys
 
 class MyArgumentParser(argparse.ArgumentParser):
@@ -55,6 +57,7 @@ def main():
 
     subparsers = parser.add_subparsers(help='commands', dest="command")
 
+    create_parser = subparsers.add_parser("version", help="Show version")
     create_parser = subparsers.add_parser("help", help="Show available help")
     create_parser = subparsers.add_parser("list", help="Subcommands")
     create_parser = subparsers.add_parser("hosts", help="Create eintries for /etc/hosts; more than one domain are seperat by ','")
@@ -64,6 +67,14 @@ def main():
 
     if opts.command == "help":
         parser.print_help()
+
+    elif opts.command == "version":
+        # read file
+        with open(os.path.dirname(os.path.abspath(sys.argv[0]))+'/../cli.json', 'r') as myfile:
+            data=myfile.read()
+        # parse file
+        obj = json.loads(data)
+        print ("Version "+obj["commands"][0]["version"])
 
     elif opts.command == "list":
         parser.print_help()
