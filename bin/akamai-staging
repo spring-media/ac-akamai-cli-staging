@@ -2,20 +2,504 @@
 
 import argparse
 from dns.resolver import dns
+import docker
 import json
+import logging
 import os
+from pathlib import Path
+import re
+from sudo import run_as_sudo
 import sys
+import time
+import subprocess
 
-class MyArgumentParser(argparse.ArgumentParser):
-    def error(self, message):
-        self.print_help(sys.stderr)
-        self.exit(0, '%s: error: %s\n' % (self.prog, message))
 
-def createHostEntries(opts):
-    if not isinstance(opts.domain, type(None)):
-        print ("Domain(s) for staging: "+opts.domain)
+PACKAGE_VERSION = "0.2"
 
-        domains = opts.domain.split(',')
+# Setup logging in console
+log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_formatter = logging.Formatter("%(message)s")
+root_logger = logging.getLogger()
+
+console_handler = logging.StreamHandler()
+console_handler.setFormatter(console_formatter)
+root_logger.addHandler(console_handler)
+
+# Set Log Level to DEBUG, INFO, WARNING, ERROR, CRITICAL
+root_logger.setLevel(logging.INFO)
+
+def main():
+    global cacheDir
+
+    # define parameters
+    prog = get_prog_name()
+    if len(sys.argv) == 1:
+        prog += " [command]"
+
+    parser = argparse.ArgumentParser(
+        description='Akamai CLI for Developer Environments',
+        add_help=False,
+        prog=prog)
+    parser.add_argument(
+        '--version',
+        action='version',
+        version='%(prog)s ' +
+                PACKAGE_VERSION)
+
+    subparsers = parser.add_subparsers(
+        title='Commands', dest="command", metavar="")
+
+    actions = {}
+
+    subparsers.add_parser(
+        name="help",
+        help="Show available help",
+        add_help=False).add_argument(
+        'args',
+        metavar="",
+        nargs=argparse.REMAINDER)
+
+    actions["hosts"] = create_sub_command(
+        subparsers, "hosts", "Create eintries for /etc/hosts",
+        None,
+        [{"name": "domains", "help": "list of domains to staging; more than one domain are seperat by ','"}])
+    
+    actions["sandbox_start"] = create_sub_command(
+        subparsers, "sandbox_start", "start sandbox for given pipeline",
+        [
+            {"name": "pipeline-dir", "help": "path to pipeline project on your system (default: .)", "default": os.getcwd()},
+            {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"}
+        ],
+        [
+            {"name": "pipeline", "help": "pipeline to use in the sandbox"},
+        ]
+    )
+
+    actions["sandbox_stop"] = create_sub_command(
+        subparsers, "sandbox_stop", "stop sandbox for given pipeline",
+        [
+            {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"}
+        ],
+        [
+            {"name": "pipeline", "help": "stop sandbox for this pipeline"},
+        ]
+    )
+
+    actions["sandbox_renew"] = create_sub_command(
+        subparsers, "sandbox_renew", "renew sandbox from the pipeline",
+        [
+            {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"}
+        ],
+        [
+            {"name": "pipeline", "help": "renew sandbox for this pipeline"},
+        ]
+    )
+
+    args = parser.parse_args()
+
+    if len(sys.argv) <= 1:
+        parser.print_help()
+        return 0
+
+    if args.command == "help":
+        if len(args.args) > 0:
+            if actions[args.args[0]]:
+                actions[args.args[0]].print_help()
+        else:
+            parser.prog = get_prog_name() + " help [command]"
+            parser.print_help()
+        return 0
+
+    # Override log level if user wants to run in debug mode
+    # Set Log Level to DEBUG, INFO, WARNING, ERROR, CRITICAL
+    if args.debug:
+        root_logger.setLevel(logging.DEBUG)
+        root_logger.info('Loglevel debug is activated.')
+
+    # confirm setup
+    confirm_setup()
+
+    # Setup logging in file
+    if not os.path.exists('logs'):
+        os.makedirs('logs')
+    log_file = os.path.join('logs', cacheDir + '/logs/staging.log')
+
+    logfile_handler = logging.FileHandler(log_file, mode='a')
+    logfile_handler.setFormatter(log_formatter)
+    root_logger.addHandler(logfile_handler)
+
+    return getattr(sys.modules[__name__], args.command.replace("-", "_"))(args)
+
+def create_sub_command(
+        subparsers,
+        command_name,
+        help,
+        optional_arguments=None,
+        required_arguments=None):
+
+    action = subparsers.add_parser(name=command_name, help=help, add_help=False)
+
+    if required_arguments:
+        required = action.add_argument_group("required arguments")
+        for arg in required_arguments:
+            name = arg["name"]
+            del arg["name"]
+            required.add_argument("--" + name,
+                                  required=True,
+                                  **arg)
+
+    optional = action.add_argument_group("optional arguments")
+    if optional_arguments:
+        for arg in optional_arguments:
+            name = arg["name"]
+            del arg["name"]
+            optional.add_argument("--" + name,
+                                    required=False,
+                                    **arg)
+
+    if command_name != "hosts":
+        optional.add_argument(
+            "--edgerc",
+            help="Location of the credentials file [$AKAMAI_EDGERC] (default: ~/.edgerc)",
+            default=os.path.join(
+                os.path.expanduser("~"),
+                '.edgerc'))
+
+        optional.add_argument(
+            "--section",
+            help="Section of the credentials file [$AKAMAI_EDGERC_SECTION] (default: papi)",
+            default="papi")
+
+    optional.add_argument(
+        "--debug",
+        help="DEBUG mode to generate additional logs for troubleshooting",
+        action="store_true")
+
+    return action
+
+def sandbox_start(args):
+    root_logger.debug(args)
+
+    if re.match("~", args.pipeline_dir):
+        args.pipeline_dir = args.pipeline_dir.replace("~", str(Path.home()))
+
+    domainSandbox = args.pipeline
+    if args.pipeline_env == "stage":
+        domainSandbox = domainSandbox.replace("www.", "www.stage.")
+
+    root_logger.info("Sandbox Environment")
+    root_logger.info("-------------------")
+    root_logger.info("Pipeline:\t\t"+args.pipeline)
+    root_logger.info("Pipeline Directory:\t"+os.path.abspath(args.pipeline_dir))
+    root_logger.info("Pipeline Environment:\t"+args.pipeline_env)
+    root_logger.info("Sandbox Domain:\t\t"+domainSandbox)
+
+    containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
+    dockerClient = docker.from_env()
+    if len(dockerClient.containers.list(filters={"name": containerName}, all=True)) > 0:
+        root_logger.error('A container with the name "' + containerName + '" exist. Please shutdown and remove it.')
+        return 1
+
+    edgeRcSection = ''
+    if args.section != '':
+        edgeRcSection = '--section ' + args.section
+
+    # create and start sandbox container
+    root_logger.info("start sandbox container")
+    sandbox = dockerClient.containers.create(
+        #"akamai/shell", 
+        "akamai/akamai-docker", 
+        name=containerName,
+        tty=True,
+        ports={9550:443},
+        environment={
+            "AK_SECTION": args.section,
+            "AK_PIPELINE": args.pipeline,
+            "AK_ENVIRONMENT": args.pipeline_env
+        },
+        volumes={
+            args.edgerc: {"bind": "/root/.edgerc", "mode": "rw"},
+            str(Path.home()) +"/.akamai-cli/cache": {"bind": "/cli/.akamai-cli/cache", "mode": "rw"},
+            os.path.abspath(args.pipeline_dir): {"bind": "/akamai-pipeline", "mode": "rw"},
+            str(Path.home()) +"/.akamai-cli/cache/staging-cli/sandboxes": {"bind": "/sandbox_helpers", "mode": "rw"}
+        }
+    )
+    sandbox.start()
+    sandbox.reload()
+    while str(sandbox.status) != "running":
+        time.sleep(5)
+    root_logger.info("sandbox container startet")
+
+    root_logger.info("check tls certificate")
+    tlsCrtFile = "/cli/.akamai-cli/cache/staging-cli/certs/" + domainSandbox + ".crt"
+    tlsKeyFile = "/cli/.akamai-cli/cache/staging-cli/certs/" + domainSandbox + ".key"
+    tlsPemFile = "/cli/.akamai-cli/cache/staging-cli/certs/" + domainSandbox + ".pem"
+    tlsLocalCrtFile = str(Path.home()) + "/.akamai-cli/cache/staging-cli/certs/" + domainSandbox + ".crt"
+    tlsLocalKeyFile = str(Path.home()) + "/.akamai-cli/cache/staging-cli/certs/" + domainSandbox + ".key"
+    tlsLocalPemFile = str(Path.home()) + "/.akamai-cli/cache/staging-cli/certs/" + domainSandbox + ".pem"
+    tlsCertCreate = False
+    if (
+        not os.path.isfile(tlsLocalCrtFile) or os.path.getsize(tlsLocalCrtFile) == 0 or
+        not os.path.isfile(tlsLocalKeyFile) or os.path.getsize(tlsLocalKeyFile) == 0
+    ):
+        root_logger.info("create tls certificate")
+        (exit_code, output) = sandbox.exec_run(
+            "openssl req -x509 -newkey rsa:4096 -sha256 -nodes -keyout " + tlsKeyFile + " -out " + tlsCrtFile + " -subj \"/CN=" + domainSandbox + "\" -addext \"subjectAltName = DNS:" + domainSandbox + "\" -days 3650"
+        )
+        root_logger.info("tls certificate created")
+    else:
+        root_logger.info("tls certificate exist")
+
+    root_logger.info("create ruletree")
+    (exit_code, output) = sandbox.exec_run("mkdir /sandbox_helpers/ruletrees")
+    ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
+    (exit_code, output) = sandbox.exec_run([
+        '/bin/bash', 
+        '-c', 
+        "akamai pipeline " + edgeRcSection + " sv -p " + args.pipeline + " " + args.pipeline_env
+    ])
+    (exit_code, output) = sandbox.exec_run(
+        [
+            '/bin/bash', 
+            '-c', 
+            "akamai pipeline " + edgeRcSection + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
+        ],
+        workdir='/akamai-pipeline'
+    )
+    sandboxName = dockerClient.containers.get(containerName).short_id + "_" + domainSandbox
+    root_logger.info("ruletree created")
+
+    root_logger.info("create sandbox")
+    root_logger.debug('akamai sandbox ' + edgeRcSection + " create -p " + domainSandbox + "_ion -n " + sandboxName)
+    
+    (exit_code, output) = sandbox.exec_run([
+            '/bin/bash', 
+            '-c', 
+            'echo "Y" | akamai sandbox ' + edgeRcSection + " create -p " + domainSandbox + "_ion -n " + sandboxName
+    ])
+    resultSandboxCreate = output.decode()
+
+    (exit_code, output) = sandbox.exec_run([
+        '/bin/bash', 
+        '-c',
+        'akamai sandbox list'
+    ])
+    if output.decode().find(sandboxName) < 0:
+        root_logger.error("can't create sandbox")
+        root_logger.error(resultSandboxCreate)
+        return 1
+    root_logger.info("sandbox created")
+
+    root_logger.info("configure sandbox")
+    configJson = "/cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/config.json"
+    (exit_code, output) = sandbox.exec_run([
+        '/bin/bash', 
+        '-c', 
+        "akamai sandbox " + edgeRcSection + " update --rules " + ruleTreeJson
+    ])
+    (exit_code, output) = sandbox.exec_run([
+        '/bin/bash', 
+        '-c', 
+        "cat " + configJson + " | jq '.sandboxServerInfo.secure = true' > /tmp/config1.json"
+    ])
+    (exit_code, output) = sandbox.exec_run([
+        '/bin/bash', 
+        '-c', 
+        "cat /tmp/config1.json | jq '.sandboxServerInfo.cert.certChainPath = \"" + tlsCrtFile + "\"' > /tmp/config2.json"
+    ])
+    (exit_code, output) = sandbox.exec_run([
+        '/bin/bash', 
+        '-c', 
+        "cat /tmp/config2.json | jq '.sandboxServerInfo.cert.keyPath = \"" + tlsKeyFile + "\"' > /tmp/config3.json"
+    ])
+    (exit_code, output) = sandbox.exec_run([
+        '/bin/bash', 
+        '-c', 
+        "mv /tmp/config3.json " + configJson + " ; rm /tmp/config?.json"
+    ])
+    root_logger.info("sandbox configured")
+
+    root_logger.info("")
+    root_logger.info("-------------------------------------------------")
+    root_logger.info("Please add the following line to your /etc/hosts:")
+    root_logger.info("127.0.0.1     " + domainSandbox)
+    root_logger.info("-------------------------------------------------")
+    root_logger.info("")
+
+    root_logger.info("start sandbox")
+    (exit_code, output) = sandbox.exec_run([
+        '/bin/bash', 
+        '-c', 
+        "akamai sandbox start &"
+    ])
+    # we must wait. why we start the sandbox in the background and the start of sandbox don't get a return value
+    i = 0
+    startSuccess = False
+    while i < 20:
+        time.sleep(15)
+        root_logger.debug("recheck sandbox start")
+        (exit_code, output) = sandbox.exec_run([
+            '/bin/bash', 
+            '-c', 
+            "cat /cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/logs/sandbox-client.log | grep \"Sandbox Client running on port\" | wc -l"
+        ])
+
+        try:
+            if (int(output) > 0):
+                startSuccess = True
+                break
+        except Exception:
+            root_logger.debug("sandbox log dosn't exist")
+
+        i += 1
+    if startSuccess:
+        root_logger.info("sandbox started successfully")
+    else:
+        root_logger.error("start sandbox failed")
+        return 1
+
+    root_logger.info("check pem file for tls certificate")
+    if (not os.path.isfile(tlsLocalPemFile) or os.path.getsize(tlsLocalPemFile) == 0) or tlsCertCreate:
+        root_logger.info("create pem file for tls certifiacte")
+        (exit_code, output) = sandbox.exec_run([
+            '/bin/bash',
+            '-c',
+            "echo '127.0.0.1     " + domainSandbox + "' >> /etc/hosts"
+        ])
+        (exit_code, output) = sandbox.exec_run([
+            '/bin/bash',
+            '-c',
+            "openssl s_client -connect " + domainSandbox + ":9550 -showcerts </dev/null 2>/dev/null| openssl x509 -outform PEM > " + tlsPemFile
+        ])
+        root_logger.info("when you are asked, enter your password to add self-signed tls certificate to your local keychain")
+        run_as_sudo("root", "/usr/bin/security add-trusted-cert -d -r trustRoot -p ssl -k /Library/Keychains/System.keychain " + tlsLocalPemFile)
+        root_logger.info("pem file created and imported to your local keychain")
+    else:
+        root_logger.info("pem file for tls certifiacte exist")
+
+    root_logger.info("")
+    root_logger.info("Now you can connect to the sandbox: https://" + domainSandbox + '/')
+    root_logger.info("")
+
+def sandbox_stop(args):
+    dockerClient = docker.from_env()
+
+    containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
+
+    if len(dockerClient.containers.list(filters={"name": containerName})) == 0:
+        root_logger.info('No container with the name "' + containerName + '" exist. Nothing to do.')
+        return 1
+
+    sandbox = dockerClient.containers.get("akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env)
+
+    edgeRcSection = ''
+    (exit_code, output) = sandbox.exec_run(
+        [
+            '/bin/bash', 
+            '-c', 
+            "echo $AK_SECTION"
+        ],
+        workdir='/akamai-pipeline'
+    )
+    edgeRcSection = '--section ' + output.decode().strip()
+
+    root_logger.info("cleanup sandbox ")
+    domainSandbox = args.pipeline
+    if args.pipeline_env == "stage":
+        domainSandbox = domainSandbox.replace("www.", "www.stage.")
+    sandboxName = dockerClient.containers.get(containerName).short_id + "_" + domainSandbox
+
+    (exit_code, output) = sandbox.exec_run([
+        '/bin/bash', 
+        '-c',
+        'akamai sandbox list | grep YES | awk \'{ print $3 }\''
+    ])
+    if len(output.decode()) > 0:
+        sandboxId = output.decode().strip()
+        root_logger.info("Delete sandbox with id " + sandboxId)
+
+        (exit_code, output) = sandbox.exec_run([
+                '/bin/bash', 
+                '-c', 
+                'echo "Y" | akamai sandbox ' + edgeRcSection + " delete " + sandboxId
+        ])
+        resultSandboxDelete = output.decode()
+
+        (exit_code, output) = sandbox.exec_run([
+            '/bin/bash', 
+            '-c',
+            'akamai sandbox list | grep YES | awk \'{ print $3 }\''
+        ])
+        if len(output.decode()) > 0:
+            print("can't delete sandbox")
+            return 1
+
+        root_logger.info("")
+        root_logger.info("------------------------------------------------------")
+        root_logger.info("Please remove the following line from your /etc/hosts:")
+        root_logger.info("127.0.0.1     " + domainSandbox)
+        root_logger.info("------------------------------------------------------")
+        root_logger.info("")
+
+    root_logger.info("stop sandbox container "+containerName)
+    sandbox.stop()
+    sandbox.remove()
+    root_logger.info("sandbox container stopped")
+
+def sandbox_renew(args):
+    dockerClient = docker.from_env()
+
+    containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
+    ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
+
+    if len(dockerClient.containers.list(filters={"name": containerName})) == 0:
+        root_logger.error('No container with the name "' + containerName + '" exist. Nothing to do.')
+        return 1
+
+    sandbox = dockerClient.containers.get(containerName)
+
+    edgeRcSection = ''
+    (exit_code, output) = sandbox.exec_run(
+        [
+            '/bin/bash', 
+            '-c', 
+            "echo $AK_SECTION"
+        ],
+        workdir='/akamai-pipeline'
+    )
+    edgeRcSection = '--section ' + output.decode().strip()
+
+    root_logger.info("recreate ruletree based on pipeline")
+    (exit_code, output) = sandbox.exec_run(
+        [
+            '/bin/bash', 
+            '-c', 
+            "akamai pipeline " + edgeRcSection + " sv -p " + args.pipeline + " " + args.pipeline_env
+        ],
+        workdir='/akamai-pipeline'
+    )
+    (exit_code, output) = sandbox.exec_run(
+        [
+            '/bin/bash', 
+            '-c', 
+            "akamai pipeline " + edgeRcSection + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
+        ],
+        workdir='/akamai-pipeline'
+    )
+
+    root_logger.info("update sandbox with new ruletree")
+    (exit_code, output) = sandbox.exec_run([
+        '/bin/bash', 
+        '-c', 
+        "akamai sandbox " + edgeRcSection + " update --rules " + ruleTreeJson
+    ])
+    root_logger.info("sandbox updated")
+
+def hosts(args):
+    if not isinstance(args.domains, type(None)):
+        root_logger.info("Domain(s) for staging: "+args.domains)
+
+        domains = args.domains.split(',')
 
         domainsHosts = []
 
@@ -23,7 +507,7 @@ def createHostEntries(opts):
             try:
                 answer = dns.resolver.resolve(domain, 'CNAME')
             except Exception:
-                print ("can't resolve domain "+domain)
+                root_logger.error("can't resolve domain "+domain)
             else:
                 if len(answer) > 0:
                     cname = str(answer[0])
@@ -33,60 +517,72 @@ def createHostEntries(opts):
                         if len(ipStaging) > 0:
                             domainsHosts.append(str(ipStaging[0])+"\t"+domain)
                         else:
-                            print ('No ip address for '+cnameStaging+' found')
+                            root_logger.error('No ip address for '+cnameStaging+' found')
                     else:
-                        print ("No Akamai CNAME for "+domain)
+                        root_logger.error("No Akamai CNAME for "+domain)
 
                 else:
-                    print ("No CNAME found for "+domain)
+                    root_logger.error("No CNAME found for "+domain)
 
         if len(domainsHosts) > 0:
-            print ("")
-            print ("Entry for /etc/hosts:")
-            print ("---------------------")
+            root_logger.info("")
+            root_logger.info("Entry for /etc/hosts:")
+            root_logger.info("---------------------")
             for entry in domainsHosts:
-                print (entry)
-            print ("")
+                root_logger.info(entry)
+            root_logger.info("")
     else:
-        print ("No domain given")
+        root_logger.error("No domain given")
 
-def main():
-    parser = MyArgumentParser(
-            description='staging the given domain(s)',
-    )
+def confirm_setup():
+    global cacheDir
 
-    subparsers = parser.add_subparsers(help='commands', dest="command")
+    cacheDir = get_cache_dir()+'/staging-cli'
+    if not os.access(cacheDir, os.W_OK):
+        print(
+            "Cache not found. You must create it to continue [Y/n]:",
+            end=' '
+        )
 
-    create_parser = subparsers.add_parser("version", help="Show version")
-    create_parser = subparsers.add_parser("help", help="Show available help")
-    create_parser = subparsers.add_parser("list", help="Subcommands")
-    create_parser = subparsers.add_parser("hosts", help="Create eintries for /etc/hosts; more than one domain are seperat by ','")
-    create_parser.add_argument("domain", nargs='?')
-    
-    opts = parser.parse_args()
+        if str.lower(input()) == 'n':
+            root_logger.debug('Cache dir shoud not be created. Exiting.')
+            exit(1)
+        else:
+            os.mkdir(cacheDir, 0o0755)
+            if not os.access(cacheDir, os.W_OK):
+                root_logger.error("Cache dir can't created. Exiting.")
+                exit(1)
+            os.mkdir(cacheDir+'/certs', 0o0755)
+            if not os.access(cacheDir+'/certs', os.W_OK):
+                root_logger.error("Cache dir can't created. Exiting.")
+                exit(1)
+            os.mkdir(cacheDir+'/logs', 0o0755)
+            if not os.access(cacheDir+'/logs', os.W_OK):
+                root_logger.error("Cache dir can't created. Exiting.")
+                exit(1)
+            os.mkdir(cacheDir+'/sandboxes', 0o0755)
+            if not os.access(cacheDir+'/sandboxes', os.W_OK):
+                root_logger.error("Cache dir can't created. Exiting.")
+                exit(1)
+            root_logger.debug('Cache dir created')
 
-    if opts.command == "help":
-        parser.print_help()
+    return
 
-    elif opts.command == "version":
-        # read file
-        with open(os.path.dirname(os.path.abspath(sys.argv[0]))+'/../cli.json', 'r') as myfile:
-            data=myfile.read()
-        # parse file
-        obj = json.loads(data)
-        print ("Version "+obj["commands"][0]["version"])
+def get_cache_dir():
+    if os.getenv("AKAMAI_CLI_CACHE_DIR"):
+        return os.getenv("AKAMAI_CLI_CACHE_DIR")
 
-    elif opts.command == "list":
-        parser.print_help()
-        
-    elif opts.command == "hosts":
-        createHostEntries(opts)
+    result = subprocess.run(["akamai config get cli.cache-path"], check=True, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    if result.returncode == 0:
+        return result.stdout.decode().strip()
 
-    else:
-        # argparse will error on unexpected commands, but
-        # in case we mistype one of the elif statements...
-        parser.print_help(sys.stderr)
+    return os.curdir
 
+def get_prog_name():
+    prog = os.path.basename(sys.argv[0])
+    if os.getenv("AKAMAI_CLI"):
+        prog = "akamai staging"
+    return prog
 
 if __name__ == '__main__':
     main()
