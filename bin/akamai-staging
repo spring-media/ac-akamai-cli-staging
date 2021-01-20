@@ -206,9 +206,11 @@ def sandbox_start(args):
 
     # create and start sandbox container
     root_logger.info("start sandbox container")
-    sandbox = dockerClient.containers.create(
+    sandbox = dockerClient.containers.run(
         #"akamai/shell", 
-        "akamai/akamai-docker", 
+        "akamai/akamai-docker",
+        platform="linux/amd64", 
+        detach=True,
         name=containerName,
         tty=True,
         ports={9550:443},
@@ -224,9 +226,9 @@ def sandbox_start(args):
             str(Path.home()) +"/.akamai-cli/cache/staging-cli/sandboxes": {"bind": "/sandbox_helpers", "mode": "rw"}
         }
     )
-    sandbox.start()
     sandbox.reload()
     while str(sandbox.status) != "running":
+        root_logger.debug("Wait for status 'running'")
         time.sleep(5)
     root_logger.info("sandbox container startet")
 
