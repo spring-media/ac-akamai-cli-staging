@@ -67,31 +67,39 @@ def main():
     actions["sandbox_start"] = create_sub_command(
         subparsers, "sandbox_start", "start sandbox for given pipeline",
         [
+            {"name": "pipeline", "help": "pipeline to use in the sandbox"},
             {"name": "pipeline-dir", "help": "path to pipeline project on your system (default: .)", "default": os.getcwd()},
-            {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"}
+            {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"},
+            {"name": "property", "help": "name of the property manager config"},
+            {"name": "property-domain", "help": "domain to use with the property manager config"}
         ],
         [
-            {"name": "pipeline", "help": "pipeline to use in the sandbox"},
+            {"name": "type", "help": "configure the sandbox with a local pipeline checkout or use a config from property manager. (pipeline|property)"}
         ]
     )
 
     actions["sandbox_stop"] = create_sub_command(
         subparsers, "sandbox_stop", "stop sandbox for given pipeline",
         [
-            {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"}
+            {"name": "pipeline", "help": "stop sandbox for this pipeline"},
+            {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"},
+            {"name": "property-domain", "help": "domain to use with the property manager config"}
         ],
         [
-            {"name": "pipeline", "help": "stop sandbox for this pipeline"},
+            {"name": "type", "help": "configure the sandbox with a local pipeline checkout or use a config from property manager. (pipeline|property)"}
         ]
     )
 
     actions["sandbox_renew"] = create_sub_command(
         subparsers, "sandbox_renew", "renew sandbox from the pipeline",
         [
-            {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"}
+            {"name": "pipeline", "help": "renew sandbox for this pipeline"},
+            {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"},
+            {"name": "property", "help": "name of the property manager config"},
+            {"name": "property-domain", "help": "domain to use with the property manager config"}
         ],
         [
-            {"name": "pipeline", "help": "renew sandbox for this pipeline"},
+            {"name": "type", "help": "configure the sandbox with a local pipeline checkout or use a config from property manager. (pipeline|property)"}
         ]
     )
 
@@ -177,24 +185,48 @@ def create_sub_command(
 
     return action
 
+def check_additional_arguments(args):
+    if args.type == "pipeline":
+        if args.pipeline == None:
+            print("please use argument --pipeline")
+            exit(1)
+    elif args.type == "property":
+        if args.property == None:
+            print("please use argument --property")
+            exit(1)
+        elif args.property_domain == None:
+            print("please use argument --property-domain")
+            exit(1)
+
 def sandbox_start(args):
     root_logger.debug(args)
+
+    check_additional_arguments(args)
 
     if re.match("~", args.pipeline_dir):
         args.pipeline_dir = args.pipeline_dir.replace("~", str(Path.home()))
 
-    domainSandbox = args.pipeline
-    if args.pipeline_env == "stage":
-        domainSandbox = domainSandbox.replace("www.", "www.stage.")
+    if args.type == "pipeline":
+        domainSandbox = args.pipeline
+        if args.pipeline_env == "stage":
+            domainSandbox = domainSandbox.replace("www.", "www.stage.")
+        containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
+    else:
+        domainSandbox = args.property_domain
+        containerName = "akamai-sandbox-"+domainSandbox
+
+    exit(1)
 
     root_logger.info("Sandbox Environment")
     root_logger.info("-------------------")
-    root_logger.info("Pipeline:\t\t"+args.pipeline)
-    root_logger.info("Pipeline Directory:\t"+os.path.abspath(args.pipeline_dir))
-    root_logger.info("Pipeline Environment:\t"+args.pipeline_env)
+    if args.type == "pipeline":
+        root_logger.info("Pipeline:\t\t"+args.pipeline)
+        root_logger.info("Pipeline Directory:\t"+os.path.abspath(args.pipeline_dir))
+        root_logger.info("Pipeline Environment:\t"+args.pipeline_env)
+    else:
+        root_logger.info("Property:\t\t"+args.property)
     root_logger.info("Sandbox Domain:\t\t"+domainSandbox)
 
-    containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
     dockerClient = docker.from_env()
     if len(dockerClient.containers.list(filters={"name": containerName}, all=True)) > 0:
         root_logger.error('A container with the name "' + containerName + '" exist. Please shutdown and remove it.')
@@ -206,25 +238,32 @@ def sandbox_start(args):
 
     # create and start sandbox container
     root_logger.info("start sandbox container")
+    volumes = {
+        args.edgerc: {"bind": "/root/.edgerc", "mode": "rw"},
+        str(Path.home()) +"/.akamai-cli/cache": {"bind": "/cli/.akamai-cli/cache", "mode": "rw"},
+        str(Path.home()) +"/.akamai-cli/cache/staging-cli/sandboxes": {"bind": "/sandbox_helpers", "mode": "rw"}
+    }
+    environment = {
+        "AK_SECTION": args.section,
+        "AK_TYPE": args.type,
+        "AK_DOMAIN": domainSandbox
+    }
+    if args.type == "pipeline":
+        environment["AK_PIPELINE"] = args.pipeline,
+        environment["AK_PIPELINE_ENV"] = args.pipeline_env
+        volumes[os.path.abspath(args.pipeline_dir)] = {"bind": "/akamai-pipeline", "mode": "rw"},
+    else:
+        environment["AK_PROPERTY"] = args.property
+
     sandbox = dockerClient.containers.run(
-        #"akamai/shell", 
         "akamai/akamai-docker",
         platform="linux/amd64", 
         detach=True,
         name=containerName,
         tty=True,
         ports={9550:443},
-        environment={
-            "AK_SECTION": args.section,
-            "AK_PIPELINE": args.pipeline,
-            "AK_ENVIRONMENT": args.pipeline_env
-        },
-        volumes={
-            args.edgerc: {"bind": "/root/.edgerc", "mode": "rw"},
-            str(Path.home()) +"/.akamai-cli/cache": {"bind": "/cli/.akamai-cli/cache", "mode": "rw"},
-            os.path.abspath(args.pipeline_dir): {"bind": "/akamai-pipeline", "mode": "rw"},
-            str(Path.home()) +"/.akamai-cli/cache/staging-cli/sandboxes": {"bind": "/sandbox_helpers", "mode": "rw"}
-        }
+        environment=environment,
+        volumes=volumes
     )
     sandbox.reload()
     while str(sandbox.status) != "running":
@@ -254,30 +293,43 @@ def sandbox_start(args):
 
     root_logger.info("create ruletree")
     (exit_code, output) = sandbox.exec_run("mkdir /sandbox_helpers/ruletrees")
-    ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
-    (exit_code, output) = sandbox.exec_run([
-        '/bin/bash', 
-        '-c', 
-        "akamai pipeline " + edgeRcSection + " sv -p " + args.pipeline + " " + args.pipeline_env
-    ])
-    (exit_code, output) = sandbox.exec_run(
-        [
+    if args.type == "pipeline":
+        ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
+        sandboxProperty = domainSandbox + "_ion"
+        (exit_code, output) = sandbox.exec_run(
+            [
+                '/bin/bash', 
+                '-c', 
+                "akamai pipeline " + edgeRcSection + " sv -p " + args.pipeline + " " + args.pipeline_env
+            ],
+            workdir='/akamai-pipeline'
+        )
+        (exit_code, output) = sandbox.exec_run(
+            [
+                '/bin/bash', 
+                '-c', 
+                "akamai pipeline " + edgeRcSection + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
+            ],
+            workdir='/akamai-pipeline'
+        )
+    else:
+        ruleTreeJson = "/sandbox_helpers/ruletrees/" + domainSandbox + "-ruletrees.json"
+        sandboxProperty = args.property
+        (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
-            "akamai pipeline " + edgeRcSection + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
-        ],
-        workdir='/akamai-pipeline'
-    )
+            "akamai property " + edgeRcSection + " retrieve " + args.property + " > " + ruleTreeJson
+        ])
     sandboxName = dockerClient.containers.get(containerName).short_id + "_" + domainSandbox
     root_logger.info("ruletree created")
 
     root_logger.info("create sandbox")
-    root_logger.debug('akamai sandbox ' + edgeRcSection + " create -p " + domainSandbox + "_ion -n " + sandboxName)
+    root_logger.debug('akamai sandbox ' + edgeRcSection + " create -p " + sandboxProperty + " -n " + sandboxName)
     
     (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
-            'echo "Y" | akamai sandbox ' + edgeRcSection + " create -p " + domainSandbox + "_ion -n " + sandboxName
+            'echo "Y" | akamai sandbox ' + edgeRcSection + " create -p " + sandboxProperty + " -n " + sandboxName
     ])
     resultSandboxCreate = output.decode()
 
@@ -386,13 +438,22 @@ def sandbox_start(args):
 def sandbox_stop(args):
     dockerClient = docker.from_env()
 
-    containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
+    check_additional_arguments(args)
+
+    if args.type == "pipeline":
+        domainSandbox = args.pipeline
+        if args.pipeline_env == "stage":
+            domainSandbox = domainSandbox.replace("www.", "www.stage.")
+        containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
+    else:
+        domainSandbox = args.property_domain
+        containerName = "akamai-sandbox-"+domainSandbox
 
     if len(dockerClient.containers.list(filters={"name": containerName})) == 0:
         root_logger.info('No container with the name "' + containerName + '" exist. Nothing to do.')
         return 1
 
-    sandbox = dockerClient.containers.get("akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env)
+    sandbox = dockerClient.containers.get(containerName)
 
     edgeRcSection = ''
     (exit_code, output) = sandbox.exec_run(
@@ -400,15 +461,11 @@ def sandbox_stop(args):
             '/bin/bash', 
             '-c', 
             "echo $AK_SECTION"
-        ],
-        workdir='/akamai-pipeline'
+        ]
     )
     edgeRcSection = '--section ' + output.decode().strip()
 
     root_logger.info("cleanup sandbox ")
-    domainSandbox = args.pipeline
-    if args.pipeline_env == "stage":
-        domainSandbox = domainSandbox.replace("www.", "www.stage.")
     sandboxName = dockerClient.containers.get(containerName).short_id + "_" + domainSandbox
 
     (exit_code, output) = sandbox.exec_run([
@@ -451,8 +508,16 @@ def sandbox_stop(args):
 def sandbox_renew(args):
     dockerClient = docker.from_env()
 
-    containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
-    ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
+    check_additional_arguments(args)
+
+    if args.type == "pipeline":
+        domainSandbox = args.pipeline
+        if args.pipeline_env == "stage":
+            domainSandbox = domainSandbox.replace("www.", "www.stage.")
+        containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
+    else:
+        domainSandbox = args.property_domain
+        containerName = "akamai-sandbox-"+domainSandbox
 
     if len(dockerClient.containers.list(filters={"name": containerName})) == 0:
         root_logger.error('No container with the name "' + containerName + '" exist. Nothing to do.')
@@ -466,28 +531,38 @@ def sandbox_renew(args):
             '/bin/bash', 
             '-c', 
             "echo $AK_SECTION"
-        ],
-        workdir='/akamai-pipeline'
+        ]
     )
     edgeRcSection = '--section ' + output.decode().strip()
 
     root_logger.info("recreate ruletree based on pipeline")
-    (exit_code, output) = sandbox.exec_run(
-        [
+    if args.type == "pipeline":
+        ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
+        sandboxProperty = domainSandbox + "_ion"
+        (exit_code, output) = sandbox.exec_run(
+            [
+                '/bin/bash', 
+                '-c', 
+                "akamai pipeline " + edgeRcSection + " sv -p " + args.pipeline + " " + args.pipeline_env
+            ],
+            workdir='/akamai-pipeline'
+        )
+        (exit_code, output) = sandbox.exec_run(
+            [
+                '/bin/bash', 
+                '-c', 
+                "akamai pipeline " + edgeRcSection + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
+            ],
+            workdir='/akamai-pipeline'
+        )
+    else:
+        ruleTreeJson = "/sandbox_helpers/ruletrees/" + domainSandbox + "-ruletrees.json"
+        sandboxProperty = args.property
+        (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
-            "akamai pipeline " + edgeRcSection + " sv -p " + args.pipeline + " " + args.pipeline_env
-        ],
-        workdir='/akamai-pipeline'
-    )
-    (exit_code, output) = sandbox.exec_run(
-        [
-            '/bin/bash', 
-            '-c', 
-            "akamai pipeline " + edgeRcSection + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
-        ],
-        workdir='/akamai-pipeline'
-    )
+            "akamai property " + edgeRcSection + " retrieve " + args.property + " > " + ruleTreeJson
+        ])
 
     root_logger.info("update sandbox with new ruletree")
     (exit_code, output) = sandbox.exec_run([
