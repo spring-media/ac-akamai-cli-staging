@@ -32,7 +32,7 @@ $ akamai staging hosts www.akamai.com,www.akamai.de
 
 To create and run a sandbox for a defined domain and pipeline. The default pipeline environment is "stage":
 ```
-akamai staging sandbox_start --type pipeline --pipeline www.autobild.de --pipeline-dir=<local_dir_of_pipeline>
+akamai staging sandbox_start --type pipeline --pipeline www.autobild.de --pipeline-dir <local_dir_of_pipeline>
 ```
 
 To create and run a sandbox for a property from Akamai
