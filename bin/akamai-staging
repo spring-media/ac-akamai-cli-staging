@@ -191,7 +191,7 @@ def check_additional_arguments(args):
             print("please use argument --pipeline")
             exit(1)
     elif args.type == "property":
-        if args.property == None:
+        if args.command != "sandbox_stop" and args.property == None:
             print("please use argument --property")
             exit(1)
         elif args.property_domain == None:
@@ -214,8 +214,6 @@ def sandbox_start(args):
     else:
         domainSandbox = args.property_domain
         containerName = "akamai-sandbox-"+domainSandbox
-
-    exit(1)
 
     root_logger.info("Sandbox Environment")
     root_logger.info("-------------------")
@@ -251,7 +249,7 @@ def sandbox_start(args):
     if args.type == "pipeline":
         environment["AK_PIPELINE"] = args.pipeline,
         environment["AK_PIPELINE_ENV"] = args.pipeline_env
-        volumes[os.path.abspath(args.pipeline_dir)] = {"bind": "/akamai-pipeline", "mode": "rw"},
+        volumes[os.path.abspath(args.pipeline_dir)] = {"bind": "/akamai-pipeline", "mode": "rw"}
     else:
         environment["AK_PROPERTY"] = args.property
 
@@ -436,6 +434,8 @@ def sandbox_start(args):
     root_logger.info("")
 
 def sandbox_stop(args):
+    root_logger.debug(args)
+
     dockerClient = docker.from_env()
 
     check_additional_arguments(args)
@@ -506,6 +506,8 @@ def sandbox_stop(args):
     root_logger.info("sandbox container stopped")
 
 def sandbox_renew(args):
+    root_logger.debug(args)
+
     dockerClient = docker.from_env()
 
     check_additional_arguments(args)
@@ -561,7 +563,7 @@ def sandbox_renew(args):
         (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
-            "akamai property " + edgeRcSection + " retrieve " + args.property + " > " + ruleTreeJson
+            "akamai property " + edgeRcSection + " retrieve " + sandboxProperty + " > " + ruleTreeJson
         ])
 
     root_logger.info("update sandbox with new ruletree")
