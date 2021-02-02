@@ -21,6 +21,10 @@ $ akamai staging hosts www.akamai.com
 $ akamai staging hosts www.akamai.com,www.akamai.de
 ```
 
+## Attention
+If you start a sandbox and there is no tls certificate found to use it will be created. This step will be imported the pem file of the certificate to MacOS Keychain. Please confirm this and enter yout password if you get the question for it.
+This imported certificate will be used from Safari and Chrome.
+
 ## Use staging module to work with sandbox and pipeline
 To create and run a sandbox for a defined domain and pipeline. The default pipeline environment is "stage":
 ```
