@@ -14,7 +14,7 @@ import time
 import subprocess
 
 
-PACKAGE_VERSION = "0.2.2"
+PACKAGE_VERSION = "0.2.3"
 
 # Setup logging in console
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -168,15 +168,20 @@ def create_sub_command(
     if command_name != "hosts":
         optional.add_argument(
             "--edgerc",
-            help="Location of the credentials file [$AKAMAI_EDGERC] (default: ~/.edgerc)",
+            help="Location of the credentials file (default: ~/.edgerc)",
             default=os.path.join(
                 os.path.expanduser("~"),
                 '.edgerc'))
 
         optional.add_argument(
             "--section",
-            help="Section of the credentials file [$AKAMAI_EDGERC_SECTION] (default: papi)",
+            help="Section of the credentials file (default: papi)",
             default="papi")
+
+        optional.add_argument(
+            "--accountkey",
+            help="Accountkey to switch the Akamai Account",
+            default="")
 
     optional.add_argument(
         "--debug",
@@ -186,6 +191,8 @@ def create_sub_command(
     return action
 
 def check_additional_arguments(args):
+    global edgeRcSection, accountKey
+
     if args.type == "pipeline":
         if args.pipeline == None:
             print("please use argument --pipeline")
@@ -198,7 +205,18 @@ def check_additional_arguments(args):
             print("please use argument --property-domain")
             exit(1)
 
+    edgeRcSection = ''
+    if args.section != '':
+        edgeRcSection = '--section ' + args.section
+
+    accountKey = ''
+    if args.accountkey != '':
+        accountKey = '--accountkey ' + args.accountkey
+
+
 def sandbox_start(args):
+    global edgeRcSection, accountKey
+
     root_logger.debug(args)
 
     check_additional_arguments(args)
@@ -225,14 +243,15 @@ def sandbox_start(args):
         root_logger.info("Property:\t\t"+args.property)
     root_logger.info("Sandbox Domain:\t\t"+domainSandbox)
 
-    dockerClient = docker.from_env()
-    if len(dockerClient.containers.list(filters={"name": containerName}, all=True)) > 0:
-        root_logger.error('A container with the name "' + containerName + '" exist. Please shutdown and remove it.')
-        return 1
+    try:
+        dockerClient = docker.from_env()
+    except Exception:
+        root_logger.error("\ndocker daemon don't run.\n")
+        exit(1)
 
-    edgeRcSection = ''
-    if args.section != '':
-        edgeRcSection = '--section ' + args.section
+    if len(dockerClient.containers.list(filters={"name": containerName}, all=True)) > 0:
+        root_logger.error('A container with the name "' + containerName + '" exist. Please shutdown and remove it first.')
+        return 1
 
     # create and start sandbox container
     root_logger.info("start sandbox container")
@@ -242,9 +261,10 @@ def sandbox_start(args):
         str(Path.home()) +"/.akamai-cli/cache/staging-cli/sandboxes": {"bind": "/sandbox_helpers", "mode": "rw"}
     }
     environment = {
+        "AK_ACCOUNTKEY": args.accountkey,
+        "AK_DOMAIN": domainSandbox,
         "AK_SECTION": args.section,
-        "AK_TYPE": args.type,
-        "AK_DOMAIN": domainSandbox
+        "AK_TYPE": args.type
     }
     if args.type == "pipeline":
         environment["AK_PIPELINE"] = args.pipeline,
@@ -289,6 +309,8 @@ def sandbox_start(args):
     else:
         root_logger.info("tls certificate exist")
 
+    optionalParams = edgeRcSection + " " + accountKey
+
     root_logger.info("create ruletree")
     (exit_code, output) = sandbox.exec_run("mkdir /sandbox_helpers/ruletrees")
     if args.type == "pipeline":
@@ -298,7 +320,7 @@ def sandbox_start(args):
             [
                 '/bin/bash', 
                 '-c', 
-                "akamai pipeline " + edgeRcSection + " sv -p " + args.pipeline + " " + args.pipeline_env
+                "akamai pipeline " + optionalParams + " sv -p " + args.pipeline + " " + args.pipeline_env
             ],
             workdir='/akamai-pipeline'
         )
@@ -306,7 +328,7 @@ def sandbox_start(args):
             [
                 '/bin/bash', 
                 '-c', 
-                "akamai pipeline " + edgeRcSection + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
+                "akamai pipeline " + optionalParams + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
             ],
             workdir='/akamai-pipeline'
         )
@@ -316,18 +338,19 @@ def sandbox_start(args):
         (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
-            "akamai property " + edgeRcSection + " retrieve " + args.property + " > " + ruleTreeJson
+            "akamai property " + optionalParams + " retrieve " + args.property + " > " + ruleTreeJson
         ])
     sandboxName = dockerClient.containers.get(containerName).short_id + "_" + domainSandbox
     root_logger.info("ruletree created")
 
     root_logger.info("create sandbox")
-    root_logger.debug('akamai sandbox ' + edgeRcSection + " create -p " + sandboxProperty + " -n " + sandboxName)
+    root_logger.debug('akamai sandbox ' + optionalParams + " create -p " + sandboxProperty + " -n " + sandboxName)
     
+    print('echo "Y" | akamai sandbox ' + optionalParams + " create -p " + sandboxProperty + " -n " + sandboxName)
     (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
-            'echo "Y" | akamai sandbox ' + edgeRcSection + " create -p " + sandboxProperty + " -n " + sandboxName
+            'echo "Y" | akamai sandbox ' + optionalParams + " create -p " + sandboxProperty + " -n " + sandboxName
     ])
     resultSandboxCreate = output.decode()
 
@@ -347,7 +370,7 @@ def sandbox_start(args):
     (exit_code, output) = sandbox.exec_run([
         '/bin/bash', 
         '-c', 
-        "akamai sandbox " + edgeRcSection + " update --rules " + ruleTreeJson
+        "akamai sandbox " + optionalParams + " update --rules " + ruleTreeJson
     ])
     (exit_code, output) = sandbox.exec_run([
         '/bin/bash', 
@@ -465,8 +488,21 @@ def sandbox_stop(args):
     )
     edgeRcSection = '--section ' + output.decode().strip()
 
+    accountKey = ''
+    (exit_code, output) = sandbox.exec_run(
+        [
+            '/bin/bash', 
+            '-c', 
+            "echo $AK_ACCOUNTKEY"
+        ]
+    )
+    if output.decode().strip() != "":
+        accountKey = '--accountkey ' + output.decode().strip()
+
     root_logger.info("cleanup sandbox ")
     sandboxName = dockerClient.containers.get(containerName).short_id + "_" + domainSandbox
+
+    optionalParams = edgeRcSection + " " + accountKey
 
     (exit_code, output) = sandbox.exec_run([
         '/bin/bash', 
@@ -476,11 +512,10 @@ def sandbox_stop(args):
     if len(output.decode()) > 0:
         sandboxId = output.decode().strip()
         root_logger.info("Delete sandbox with id " + sandboxId)
-
         (exit_code, output) = sandbox.exec_run([
                 '/bin/bash', 
                 '-c', 
-                'echo "Y" | akamai sandbox ' + edgeRcSection + " delete " + sandboxId
+                'echo "Y" | akamai sandbox ' + optionalParams + " delete " + sandboxId
         ])
         resultSandboxDelete = output.decode()
 
@@ -528,14 +563,23 @@ def sandbox_renew(args):
     sandbox = dockerClient.containers.get(containerName)
 
     edgeRcSection = ''
-    (exit_code, output) = sandbox.exec_run(
-        [
+    (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
             "echo $AK_SECTION"
-        ]
-    )
+    ])
     edgeRcSection = '--section ' + output.decode().strip()
+
+    accountKey = ''
+    (exit_code, output) = sandbox.exec_run([
+            '/bin/bash', 
+            '-c', 
+            "echo $AK_ACCOUNTKEY"
+    ])
+    if output.decode().strip() != "":
+        accountKey = '--accountkey ' + output.decode().strip()
+
+    optionalParams = edgeRcSection + " " + accountKey
 
     root_logger.info("recreate ruletree based on pipeline")
     if args.type == "pipeline":
@@ -545,7 +589,7 @@ def sandbox_renew(args):
             [
                 '/bin/bash', 
                 '-c', 
-                "akamai pipeline " + edgeRcSection + " sv -p " + args.pipeline + " " + args.pipeline_env
+                "akamai pipeline " + optionalParams + " sv -p " + args.pipeline + " " + args.pipeline_env
             ],
             workdir='/akamai-pipeline'
         )
@@ -553,7 +597,7 @@ def sandbox_renew(args):
             [
                 '/bin/bash', 
                 '-c', 
-                "akamai pipeline " + edgeRcSection + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
+                "akamai pipeline " + optionalParams + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
             ],
             workdir='/akamai-pipeline'
         )
@@ -563,14 +607,14 @@ def sandbox_renew(args):
         (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
-            "akamai property " + edgeRcSection + " retrieve " + sandboxProperty + " > " + ruleTreeJson
+            "akamai property " + optionalParams + " retrieve " + sandboxProperty + " > " + ruleTreeJson
         ])
 
     root_logger.info("update sandbox with new ruletree")
     (exit_code, output) = sandbox.exec_run([
         '/bin/bash', 
         '-c', 
-        "akamai sandbox " + edgeRcSection + " update --rules " + ruleTreeJson
+        "akamai sandbox " + optionalParams + " update --rules " + ruleTreeJson
     ])
     root_logger.info("sandbox updated")
 
