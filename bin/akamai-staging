@@ -71,7 +71,8 @@ def main():
             {"name": "pipeline-dir", "help": "path to pipeline project on your system (default: .)", "default": os.getcwd()},
             {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"},
             {"name": "property", "help": "name of the property manager config"},
-            {"name": "property-domain", "help": "domain to use with the property manager config"}
+            {"name": "property-domain", "help": "domain to use with the property manager config"},
+            {"name": "property-version", "help": "version of property config which use"}
         ],
         [
             {"name": "type", "help": "configure the sandbox with a local pipeline checkout or use a config from property manager. (pipeline|property)"}
@@ -204,6 +205,8 @@ def check_additional_arguments(args):
         elif args.property_domain == None:
             print("please use argument --property-domain")
             exit(1)
+        elif args.command == "sandbox_start" and args.property_version == None:
+            args.property_version = ""
 
     edgeRcSection = ''
     if args.section != '':
@@ -241,6 +244,10 @@ def sandbox_start(args):
         root_logger.info("Pipeline Environment:\t"+args.pipeline_env)
     else:
         root_logger.info("Property:\t\t"+args.property)
+        if args.property_version == "":
+            root_logger.info("Property Version:\tlatest")
+        else:
+            root_logger.info("Property Version:\t"+args.property_version)
     root_logger.info("Sandbox Domain:\t\t"+domainSandbox)
 
     try:
@@ -272,6 +279,7 @@ def sandbox_start(args):
         volumes[os.path.abspath(args.pipeline_dir)] = {"bind": "/akamai-pipeline", "mode": "rw"}
     else:
         environment["AK_PROPERTY"] = args.property
+        environment["AK_PROPERTY_VERSION"] = args.property_version
 
     sandbox = dockerClient.containers.run(
         "akamai/akamai-docker",
@@ -334,11 +342,15 @@ def sandbox_start(args):
         )
     else:
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + domainSandbox + "-ruletrees.json"
+        retrieveParams = args.property
         sandboxProperty = args.property
+        if args.property_version != "":
+            retrieveParams = " --propver " + args.property_version
+
         (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
-            "akamai property " + optionalParams + " retrieve " + args.property + " > " + ruleTreeJson
+            "akamai property " + optionalParams + " retrieve " + retrieveParams + " > " + ruleTreeJson
         ])
     sandboxName = dockerClient.containers.get(containerName).short_id + "_" + domainSandbox
     root_logger.info("ruletree created")
@@ -346,7 +358,6 @@ def sandbox_start(args):
     root_logger.info("create sandbox")
     root_logger.debug('akamai sandbox ' + optionalParams + " create -p " + sandboxProperty + " -n " + sandboxName)
     
-    print('echo "Y" | akamai sandbox ' + optionalParams + " create -p " + sandboxProperty + " -n " + sandboxName)
     (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
@@ -604,6 +615,14 @@ def sandbox_renew(args):
     else:
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + domainSandbox + "-ruletrees.json"
         sandboxProperty = args.property
+
+        (exit_code, output) = sandbox.exec_run([
+                '/bin/bash', 
+                '-c', 
+                "echo $AK_PROPERTY_VERSION"
+        ])
+        sandboxProperty += " --propver " + output.decode().strip()
+
         (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
