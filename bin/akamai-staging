@@ -311,8 +311,12 @@ def sandbox_start(args):
     ):
         root_logger.info("create tls certificate")
         (exit_code, output) = sandbox.exec_run(
-            "apk update ; apk add openssl"
+            "apk update"
         )
+        (exit_code, output) = sandbox.exec_run(
+            "apk add openssl"
+        )
+        root_logger.info("openssl req -x509 -newkey rsa:4096 -sha256 -nodes -keyout " + tlsKeyFile + " -out " + tlsCrtFile + " -subj \"/CN=" + domainSandbox + "\" -addext \"subjectAltName = DNS:" + domainSandbox + "\" -days 3650")
         (exit_code, output) = sandbox.exec_run(
             "openssl req -x509 -newkey rsa:4096 -sha256 -nodes -keyout " + tlsKeyFile + " -out " + tlsCrtFile + " -subj \"/CN=" + domainSandbox + "\" -addext \"subjectAltName = DNS:" + domainSandbox + "\" -days 3650"
         )
@@ -602,7 +606,6 @@ def sandbox_renew(args):
         root_logger.info("create ruletree based on pipeline")
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
         sandboxProperty = domainSandbox + "_ion"
-        root_logger.info("akamai pipeline " + optionalParamsPipeline + " sv -p " + args.pipeline + " " + args.pipeline_env)
         (exit_code, output) = sandbox.exec_run(
             [
                 '/bin/bash', 
@@ -611,7 +614,6 @@ def sandbox_renew(args):
             ],
             workdir='/akamai-pipeline'
         )
-        root_logger.info("akamai pipeline " + optionalParamsPipeline + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson)
         (exit_code, output) = sandbox.exec_run(
             [
                 '/bin/bash', 
@@ -639,7 +641,6 @@ def sandbox_renew(args):
         ])
 
     root_logger.info("update sandbox with new ruletree")
-    root_logger.info("akamai sandbox " + optionalParamsSandbox + " update --rules " + ruleTreeJson)
     (exit_code, output) = sandbox.exec_run([
         '/bin/bash', 
         '-c', 
