@@ -282,7 +282,7 @@ def sandbox_start(args):
         environment["AK_PROPERTY_VERSION"] = args.property_version
 
     sandbox = dockerClient.containers.run(
-        "akamai/akamai-docker",
+        "akamai/shell",
         platform="linux/amd64", 
         detach=True,
         name=containerName,
@@ -311,6 +311,9 @@ def sandbox_start(args):
     ):
         root_logger.info("create tls certificate")
         (exit_code, output) = sandbox.exec_run(
+            "apk update ; apk add openssl"
+        )
+        (exit_code, output) = sandbox.exec_run(
             "openssl req -x509 -newkey rsa:4096 -sha256 -nodes -keyout " + tlsKeyFile + " -out " + tlsCrtFile + " -subj \"/CN=" + domainSandbox + "\" -addext \"subjectAltName = DNS:" + domainSandbox + "\" -days 3650"
         )
         root_logger.info("tls certificate created")
@@ -319,27 +322,27 @@ def sandbox_start(args):
 
     optionalParams = edgeRcSection + " " + accountKey
 
-    root_logger.info("create ruletree")
+    # root_logger.info("create ruletree")
     (exit_code, output) = sandbox.exec_run("mkdir /sandbox_helpers/ruletrees")
     if args.type == "pipeline":
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
         sandboxProperty = domainSandbox + "_ion"
-        (exit_code, output) = sandbox.exec_run(
-            [
-                '/bin/bash', 
-                '-c', 
-                "akamai pipeline " + optionalParams + " sv -p " + args.pipeline + " " + args.pipeline_env
-            ],
-            workdir='/akamai-pipeline'
-        )
-        (exit_code, output) = sandbox.exec_run(
-            [
-                '/bin/bash', 
-                '-c', 
-                "akamai pipeline " + optionalParams + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
-            ],
-            workdir='/akamai-pipeline'
-        )
+        # (exit_code, output) = sandbox.exec_run(
+        #     [
+        #         '/bin/bash', 
+        #         '-c', 
+        #         "akamai pipeline " + optionalParams + " sv -p " + args.pipeline + " " + args.pipeline_env
+        #     ],
+        #     workdir='/akamai-pipeline'
+        # )
+        # (exit_code, output) = sandbox.exec_run(
+        #     [
+        #         '/bin/bash', 
+        #         '-c', 
+        #         "akamai pipeline " + optionalParams + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
+        #     ],
+        #     workdir='/akamai-pipeline'
+        # )
     else:
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + domainSandbox + "-ruletrees.json"
         retrieveParams = args.property
@@ -347,13 +350,13 @@ def sandbox_start(args):
         if args.property_version != "":
             retrieveParams = " --propver " + args.property_version
 
-        (exit_code, output) = sandbox.exec_run([
-            '/bin/bash', 
-            '-c', 
-            "akamai property " + optionalParams + " retrieve " + retrieveParams + " > " + ruleTreeJson
-        ])
+        # (exit_code, output) = sandbox.exec_run([
+        #     '/bin/bash', 
+        #     '-c', 
+        #     "akamai property " + optionalParams + " retrieve " + retrieveParams + " > " + ruleTreeJson
+        # ])
     sandboxName = dockerClient.containers.get(containerName).short_id + "_" + domainSandbox
-    root_logger.info("ruletree created")
+    # root_logger.info("ruletree created")
 
     root_logger.info("create sandbox")
     root_logger.debug('akamai sandbox ' + optionalParams + " create -p " + sandboxProperty + " -n " + sandboxName)
@@ -375,6 +378,8 @@ def sandbox_start(args):
         root_logger.error(resultSandboxCreate)
         return 1
     root_logger.info("sandbox created")
+
+    sandbox_renew(args)
 
     root_logger.info("configure sandbox")
     configJson = "/cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/config.json"
@@ -581,38 +586,42 @@ def sandbox_renew(args):
     ])
     edgeRcSection = '--section ' + output.decode().strip()
 
-    accountKey = ''
+    optionalParams = edgeRcSection
+    optionalParamsPipeline = optionalParams
+    optionalParamsSandbox = optionalParams
     (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
             "echo $AK_ACCOUNTKEY"
     ])
     if output.decode().strip() != "":
-        accountKey = '--accountkey ' + output.decode().strip()
+        optionalParamsPipeline += ' -a ' + output.decode().strip()
+        optionalParamsSandbox = ' --accountkey ' + output.decode().strip()
 
-    optionalParams = edgeRcSection + " " + accountKey
-
-    root_logger.info("recreate ruletree based on pipeline")
     if args.type == "pipeline":
+        root_logger.info("create ruletree based on pipeline")
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
         sandboxProperty = domainSandbox + "_ion"
+        root_logger.info("akamai pipeline " + optionalParamsPipeline + " sv -p " + args.pipeline + " " + args.pipeline_env)
         (exit_code, output) = sandbox.exec_run(
             [
                 '/bin/bash', 
                 '-c', 
-                "akamai pipeline " + optionalParams + " sv -p " + args.pipeline + " " + args.pipeline_env
+                "akamai pipeline " + optionalParamsPipeline + " sv -p " + args.pipeline + " " + args.pipeline_env
             ],
             workdir='/akamai-pipeline'
         )
+        root_logger.info("akamai pipeline " + optionalParamsPipeline + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson)
         (exit_code, output) = sandbox.exec_run(
             [
                 '/bin/bash', 
                 '-c', 
-                "akamai pipeline " + optionalParams + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
+                "akamai pipeline " + optionalParamsPipeline + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson
             ],
             workdir='/akamai-pipeline'
         )
     else:
+        root_logger.info("create ruletree based on property")
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + domainSandbox + "-ruletrees.json"
         sandboxProperty = args.property
 
@@ -626,14 +635,15 @@ def sandbox_renew(args):
         (exit_code, output) = sandbox.exec_run([
             '/bin/bash', 
             '-c', 
-            "akamai property " + optionalParams + " retrieve " + sandboxProperty + " > " + ruleTreeJson
+            "akamai property " + optionalParamsPipeline + " retrieve " + sandboxProperty + " > " + ruleTreeJson
         ])
 
     root_logger.info("update sandbox with new ruletree")
+    root_logger.info("akamai sandbox " + optionalParamsSandbox + " update --rules " + ruleTreeJson)
     (exit_code, output) = sandbox.exec_run([
         '/bin/bash', 
         '-c', 
-        "akamai sandbox " + optionalParams + " update --rules " + ruleTreeJson
+        "akamai sandbox " + optionalParamsSandbox + " update --rules " + ruleTreeJson
     ])
     root_logger.info("sandbox updated")
 
