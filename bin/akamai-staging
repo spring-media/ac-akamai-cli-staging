@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
 import argparse
+from json import decoder
 from dns.resolver import dns
 import docker
 import json
@@ -72,7 +73,8 @@ def main():
             {"name": "pipeline-env", "help": "the environment on the pipeline (default: stage)", "default": "stage"},
             {"name": "property", "help": "name of the property manager config"},
             {"name": "property-domain", "help": "domain to use with the property manager config"},
-            {"name": "property-version", "help": "version of property config which use"}
+            {"name": "property-version", "help": "version of property config which use"},
+            {"name": "origin-mappings", "help": "additional mapping for origin; sample: '{\"from\": \"myneworigin.com\", \"to\": \"pass-through\"}' (show here: https://learn.akamai.com/en-us/webhelp/sandbox/sandbox-user-guide/GUID-1402D076-BA9F-4AE9-899A-9C32D8956A14.html)"}
         ],
         [
             {"name": "type", "help": "configure the sandbox with a local pipeline checkout or use a config from property manager. (pipeline|property)"}
@@ -362,32 +364,28 @@ def sandbox_start(args):
         return 1
 
     root_logger.info("configure sandbox")
-    configJson = "/cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/config.json"
+    localConfigJson = str(Path.home())+"/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/config.json"
+
     (exit_code, output) = sandbox.exec_run([
         '/bin/bash', 
         '-c', 
         "akamai sandbox " + optionalParams + " update --rules " + ruleTreeJson
     ])
-    (exit_code, output) = sandbox.exec_run([
-        '/bin/bash', 
-        '-c', 
-        "cat " + configJson + " | jq '.sandboxServerInfo.secure = true' > /tmp/config1.json"
-    ])
-    (exit_code, output) = sandbox.exec_run([
-        '/bin/bash', 
-        '-c', 
-        "cat /tmp/config1.json | jq '.sandboxServerInfo.cert.certChainPath = \"" + tlsCrtFile + "\"' > /tmp/config2.json"
-    ])
-    (exit_code, output) = sandbox.exec_run([
-        '/bin/bash', 
-        '-c', 
-        "cat /tmp/config2.json | jq '.sandboxServerInfo.cert.keyPath = \"" + tlsKeyFile + "\"' > /tmp/config3.json"
-    ])
-    (exit_code, output) = sandbox.exec_run([
-        '/bin/bash', 
-        '-c', 
-        "mv /tmp/config3.json " + configJson + " ; rm /tmp/config?.json"
-    ])
+
+    configJsonObj = open(localConfigJson, mode = "r")
+    configObj = json.load(configJsonObj)
+    configJsonObj.close()
+
+    configObj["sandboxServerInfo"]["secure"] = True
+    configObj["sandboxServerInfo"]["cert"] = {"certChainPath": tlsCrtFile, "keyPath": tlsKeyFile}
+
+    if args.origin_mappings != None:
+        configObj["originMappings"] += [json.loads(args.origin_mappings)]
+
+    configJsonObj = open(localConfigJson, mode = "w")
+    configJsonObj.write(json.dumps(configObj, indent=4))
+    configJsonObj.close()
+
     root_logger.info("sandbox configured")
 
     root_logger.info("")
@@ -449,7 +447,14 @@ def sandbox_start(args):
         root_logger.info("pem file for tls certifiacte exist")
 
     root_logger.info("")
-    root_logger.info("Now you can connect to the sandbox: https://" + domainSandbox + '/')
+    root_logger.info("sandbox informations")
+    root_logger.info("--------------------")
+    root_logger.info("sandbox name: " + sandboxName)
+    root_logger.info("log origin requests: /cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/origin-requests.log")
+    root_logger.info("log requests: /cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/requests.log")
+    root_logger.info("log sandbox client: /cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/sandbox-client.log")
+    root_logger.info("")
+    root_logger.info(">>> Now you can connect to the sandbox: https://" + domainSandbox + '/')
     root_logger.info("")
 
 def sandbox_stop(args):
