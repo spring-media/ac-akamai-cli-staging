@@ -231,8 +231,11 @@ def sandbox_start(args):
 
     if args.type == "pipeline":
         domainSandbox = args.pipeline
-        if args.pipeline_env == "stage":
+        if args.property_domain != None:
+            domainSandbox = args.property_domain
+        elif args.pipeline_env == "stage":
             domainSandbox = domainSandbox.replace("www.", "www.stage.")
+            domainSandbox = domainSandbox.replace("i.", "i.stage.")
         containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
     else:
         domainSandbox = args.property_domain
@@ -550,8 +553,11 @@ def sandbox_renew(args):
 
     if args.type == "pipeline":
         domainSandbox = args.pipeline
-        if args.pipeline_env == "stage":
+        if args.property_domain != None:
+            domainSandbox = args.property_domain
+        elif args.pipeline_env == "stage":
             domainSandbox = domainSandbox.replace("www.", "www.stage.")
+            domainSandbox = domainSandbox.replace("i.", "i.stage.")
         containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
     else:
         domainSandbox = args.property_domain
