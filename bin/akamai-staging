@@ -601,6 +601,11 @@ def sandbox_renew(args):
             ],
             workdir='/akamai-pipeline'
         )
+        if exit_code > 0:
+            root_logger.error("Can't save ruletree")
+            root_logger.error(output.decode('utf-8'))
+            return 1
+
         (exit_code, output) = sandbox.exec_run(
             [
                 '/bin/bash', 
