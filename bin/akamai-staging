@@ -105,6 +105,9 @@ def main():
             {"name": "type", "help": "configure the sandbox with a local pipeline checkout or use a config from property manager. (pipeline|property)"}
         ]
     )
+    actions["docker_refresh"] = create_sub_command(
+        subparsers, "docker_refresh", "load the newest docker image 'akamai/shell'"
+    )
 
     args = parser.parse_args()
 
@@ -168,7 +171,7 @@ def create_sub_command(
                                     required=False,
                                     **arg)
 
-    if command_name != "hosts":
+    if command_name != "hosts" and command_name != "docker_refresh":
         optional.add_argument(
             "--edgerc",
             help="Location of the credentials file (default: ~/.edgerc)",
@@ -231,11 +234,8 @@ def sandbox_start(args):
 
     if args.type == "pipeline":
         domainSandbox = args.pipeline
-        if args.property_domain != None:
-            domainSandbox = args.property_domain
-        elif args.pipeline_env == "stage":
+        if args.pipeline_env == "stage":
             domainSandbox = domainSandbox.replace("www.", "www.stage.")
-            domainSandbox = domainSandbox.replace("i.", "i.stage.")
         containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
     else:
         domainSandbox = args.property_domain
@@ -453,9 +453,9 @@ def sandbox_start(args):
     root_logger.info("sandbox informations")
     root_logger.info("--------------------")
     root_logger.info("sandbox name: " + sandboxName)
-    root_logger.info("log origin requests: /cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/origin-requests.log")
-    root_logger.info("log requests: /cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/requests.log")
-    root_logger.info("log sandbox client: /cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/sandbox-client.log")
+    root_logger.info("log origin requests: /cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/logs/origin-requests.log")
+    root_logger.info("log requests: /cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/logs/requests.log")
+    root_logger.info("log sandbox client: /cli/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/logs/sandbox-client.log")
     root_logger.info("")
     root_logger.info(">>> Now you can connect to the sandbox: https://" + domainSandbox + '/')
     root_logger.info("")
@@ -553,11 +553,8 @@ def sandbox_renew(args):
 
     if args.type == "pipeline":
         domainSandbox = args.pipeline
-        if args.property_domain != None:
-            domainSandbox = args.property_domain
-        elif args.pipeline_env == "stage":
+        if args.pipeline_env == "stage":
             domainSandbox = domainSandbox.replace("www.", "www.stage.")
-            domainSandbox = domainSandbox.replace("i.", "i.stage.")
         containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
     else:
         domainSandbox = args.property_domain
@@ -593,6 +590,7 @@ def sandbox_renew(args):
         root_logger.info("create ruletree based on pipeline")
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
         sandboxProperty = domainSandbox + "_ion"
+        root_logger.debug("akamai pipeline " + optionalParamsPipeline + " sv -p " + args.pipeline + " " + args.pipeline_env)
         (exit_code, output) = sandbox.exec_run(
             [
                 '/bin/bash', 
@@ -601,11 +599,12 @@ def sandbox_renew(args):
             ],
             workdir='/akamai-pipeline'
         )
-        if exit_code > 0:
-            root_logger.error("Can't save ruletree")
-            root_logger.error(output.decode('utf-8'))
+        if exit_code != 0:
+            root_logger.error("Can't save pipeline")
+            root_logger.error(output.decode())
             return 1
 
+        root_logger.debug("akamai pipeline " + optionalParamsPipeline + " show-ruletree -p " + args.pipeline + " " + args.pipeline_env + " > " + ruleTreeJson)
         (exit_code, output) = sandbox.exec_run(
             [
                 '/bin/bash', 
@@ -614,6 +613,10 @@ def sandbox_renew(args):
             ],
             workdir='/akamai-pipeline'
         )
+        if exit_code != 0:
+            root_logger.error("Can't show ruletree")
+            root_logger.error(output.decode())
+            return 1
     else:
         root_logger.info("create ruletree based on property")
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + domainSandbox + "-ruletrees.json"
@@ -625,6 +628,10 @@ def sandbox_renew(args):
                 "echo $AK_PROPERTY_VERSION"
         ])
         sandboxProperty += " --propver " + output.decode().strip()
+        if exit_code != 0:
+            root_logger.error("Can't show ruletree")
+            root_logger.error(output.decode())
+            return 1
 
         root_logger.debug("akamai pm " + optionalParamsPipeline + " show-ruletree " + sandboxProperty + " > " + ruleTreeJson)
         (exit_code, output) = sandbox.exec_run([
@@ -634,6 +641,7 @@ def sandbox_renew(args):
         ])
         if exit_code > 0:
             root_logger.error("read property ruletree failed")
+            root_logger.error(output.decode())
             return 1
 
     root_logger.info("update sandbox with new ruletree")
@@ -642,7 +650,21 @@ def sandbox_renew(args):
         '-c', 
         "akamai sandbox " + optionalParamsSandbox + " update --rules " + ruleTreeJson
     ])
+    if exit_code > 0:
+        root_logger.error("read property ruletree failed")
+        root_logger.error(output.decode())
+        return 1
+
     root_logger.info("sandbox updated")
+
+    return 0
+
+def docker_refresh(args):
+    root_logger.debug(args)
+
+    root_logger.info("check for new docker image and pull it")
+    client = docker.from_env()
+    image = client.images.pull('akamai/shell')
 
     return 0
 
