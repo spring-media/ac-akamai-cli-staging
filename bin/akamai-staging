@@ -15,7 +15,7 @@ import time
 import subprocess
 
 
-PACKAGE_VERSION = "0.3.1"
+PACKAGE_VERSION = "0.3.2"
 
 # Setup logging in console
 log_formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
