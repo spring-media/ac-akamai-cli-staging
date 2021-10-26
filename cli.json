@@ -5,8 +5,13 @@
   "commands": [
     {
       "name": "staging",
-      "version": "0.3.2",
+      "version": "0.4",
       "description": "An Akamai CLI command for staging domains"
+    },
+    {
+      "name": "simple-sandbox",
+      "version": "0.4",
+      "description": "An Akamai CLI command for simple use the akamai sandbox feature"
     }
   ]
 }
