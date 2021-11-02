@@ -10,6 +10,7 @@
     },
     {
       "name": "simple-sandbox",
+      "aliases": ["ss"],
       "version": "0.4",
       "description": "An Akamai CLI command for simple use the akamai sandbox feature"
     }

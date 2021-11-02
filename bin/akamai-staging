@@ -32,17 +32,12 @@ def main():
         PACKAGE_VERSION = data['commands'][0]['version']
         f.close()
 
-    parser = argparse.ArgumentParser(
-        description='Akamai CLI for staging akamaized domains',
-        add_help=True,
-        prog=get_prog_name())
+    parser = argparse.ArgumentParser()
+#        description='Akamai CLI for staging akamaized domains',
+#        add_help=True,
+#        prog=get_prog_name())
 
-    parser.add_argument(
-        '--version',
-        action='version',
-        version='%(prog)s ' +
-                PACKAGE_VERSION)
-
+    parser.add_argument('--version', action='version', version='%(prog)s ' + PACKAGE_VERSION)
     parser.add_argument("domains", help="akamaized domain(s) to staging")
 
     args = parser.parse_args()
