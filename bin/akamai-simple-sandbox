@@ -657,20 +657,18 @@ def ew_update(args):
 
     check_additional_arguments(args)
 
-    if args.type == "pipeline":
-        domainSandbox = args.pipeline
-        if args.pipeline_env == "stage":
+    if sandboxEnv['type'] == "pipeline":
+        domainSandbox = sandboxEnv['pipeline']
+        if sandboxEnv['pipeline_env'] == "stage":
             domainSandbox = domainSandbox.replace("www.", "www.stage.")
-        containerName = "akamai-sandbox-"+args.pipeline+"-"+args.pipeline_env
     else:
-        domainSandbox = args.domain
-        containerName = "akamai-sandbox-"+domainSandbox
+        domainSandbox = sandboxEnv['domain']
 
-    if len(dockerClient.containers.list(filters={"name": containerName})) == 0:
-        root_logger.error('No container with the name "' + containerName + '" exist. Nothing to do.')
+    if len(dockerClient.containers.list(filters={"name": sandboxEnv['container-name']})) == 0:
+        root_logger.error('No container with the name "' + sandboxEnv['container-name'] + '" exist. Nothing to do.')
         return 1
 
-    sandbox = dockerClient.containers.get(containerName)
+    sandbox = dockerClient.containers.get(sandboxEnv['container-name'])
 
     root_logger.info("rebuild edgeworker bundle tarball")
     (exit_code, output) = sandbox.exec_run(
