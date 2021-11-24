@@ -369,11 +369,12 @@ def start(args):
     (exit_code, output) = sandbox.exec_run("mkdir /sandbox_helpers/ruletrees")
     if args.type == "pipeline":
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + args.pipeline + "-" + args.pipeline_env + "-ruletrees.json"
-        #sandboxProperty = domainSandbox + "_ion"
-        sandboxProperty = args.pipeline + "_ion"
+        sandboxProperty = domainSandbox + "_ion"
+        #sandboxProperty = args.pipeline + "_ion"
     else:
         ruleTreeJson = "/sandbox_helpers/ruletrees/" + domainSandbox + "-ruletrees.json"
         sandboxProperty = args.property
+    root_logger.debug('sandbox property: '+sandboxProperty)
 
     sandboxName = dockerClient.containers.get(containerName).short_id + "_" + domainSandbox
 
@@ -405,6 +406,7 @@ def start(args):
     root_logger.info("configure sandbox")
     localConfigJson = str(Path.home())+"/.akamai-cli/cache/sandbox-cli/sandboxes/" + sandboxName + "/config.json"
 
+    root_logger.debug("akamai sandbox " + optionalParams + " update --rules " + ruleTreeJson)
     (exit_code, output) = sandbox.exec_run([
         '/bin/bash', 
         '-c', 
@@ -419,6 +421,7 @@ def start(args):
     configObj["sandboxServerInfo"]["cert"] = {"certChainPath": tlsCrtFile, "keyPath": tlsKeyFile}
 
     if args.origin_mappings != None:
+        print(args.origin_mappings)
         configObj["originMappings"] += [json.loads(args.origin_mappings)]
 
     configJsonObj = open(localConfigJson, mode = "w")
@@ -525,7 +528,7 @@ def stop(args):
 
     optionalParams = '--section ' + sandboxEnv['section']
     if sandboxEnv['accountkey'] != "":
-        optionalParams += '--accountkey ' + sandboxEnv['accountkey']
+        optionalParams += ' --accountkey ' + sandboxEnv['accountkey']
 
     (exit_code, output) = sandbox.exec_run([
         '/bin/bash', 
@@ -535,6 +538,7 @@ def stop(args):
     if len(output.decode()) > 0:
         sandboxId = output.decode().strip()
         root_logger.info("Delete sandbox with id " + sandboxId)
+        root_logger.debug('echo "Y" | akamai sandbox ' + optionalParams + " delete " + sandboxId)
         (exit_code, output) = sandbox.exec_run([
                 '/bin/bash', 
                 '-c', 
